@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "kokoro-min"
-version = "0.1.0"
+version = "0.1.1"
 description = "Minimal phoneme-only inference core for Kokoro TTS"
 authors = [{ name = "YourName" }]
 dependencies = ["torch"]
