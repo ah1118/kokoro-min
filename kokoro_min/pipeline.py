@@ -160,19 +160,31 @@ class KPipeline:
         return audios
 
 
-# =====================================================
-# Modal-friendly global model cache
-# =====================================================
+# -----------------------------
+# Modal-friendly singleton
+# -----------------------------
 _MODEL: Optional[KModel] = None
 
 
-def get_model(device: Optional[str] = None) -> KModel:
+def get_model(
+    device: Optional[str] = None,
+    *,
+    config_path: str = "/models/config.json",
+    model_path: str = "/models/kokoro.pth",
+) -> KModel:
     """
-    Load Kokoro model once per container.
+    Global cached model (load once per container).
     """
     global _MODEL
     if _MODEL is None:
         dev = _auto_device(device)
-        _MODEL = KModel().to(dev).eval()
+        _MODEL = (
+            KModel(
+                config_path=config_path,
+                model_path=model_path,
+            )
+            .to(dev)
+            .eval()
+        )
         _MODEL.requires_grad_(False)
     return _MODEL
