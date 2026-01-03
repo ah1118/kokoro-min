@@ -1,4 +1,3 @@
-# kokoro_min/pipeline.py
 from __future__ import annotations
 
 from typing import Dict, List, Optional, Union
@@ -7,9 +6,9 @@ import torch
 from .model import KModel
 
 
-# -----------------------------
+# =====================================================
 # Helpers
-# -----------------------------
+# =====================================================
 def _auto_device(device: Optional[str]) -> str:
     if device is None:
         return "cuda" if torch.cuda.is_available() else "cpu"
@@ -25,22 +24,22 @@ def _as_list(x: Union[str, List[str]]) -> List[str]:
     return [x] if x else []
 
 
-# -----------------------------
-# Hardened Phoneme Pipeline
-# -----------------------------
+# =====================================================
+# Phoneme-only Pipeline (Option 1)
+# =====================================================
 class KPipeline:
     """
-    Option 1 pipeline: PHONEMES → AUDIO ONLY
+    PHONEMES → AUDIO ONLY
 
-    ❌ No text processing
+    ❌ No text
     ❌ No G2P
     ❌ No language logic
     ❌ No file I/O
     ❌ No silent truncation
 
-    ✅ Fast
     ✅ Deterministic
     ✅ Modal-friendly
+    ✅ RVC-ready
     """
 
     def __init__(
@@ -55,20 +54,21 @@ class KPipeline:
             self.model = self.model.to(self.device).eval()
             self.model.requires_grad_(False)
 
-        # Preloaded voices (name → tensor)
+        # name -> voice tensor
         self.voices: Dict[str, torch.FloatTensor] = {}
 
-    # -------- Voices --------
+    # -------------------------------------------------
+    # Voice handling
+    # -------------------------------------------------
     def register_voice(self, name: str, pack: torch.FloatTensor) -> None:
         """
-        Register a voice embedding pack in memory.
+        Register a voice/style embedding tensor.
+
+        pack shape: [N, style_dim]
         """
         self.voices[name] = pack.detach()
 
     def resolve_voice(self, voice: Union[str, torch.FloatTensor]) -> torch.FloatTensor:
-        """
-        Resolve voice by name or direct tensor.
-        """
         if isinstance(voice, torch.FloatTensor):
             return voice
         if voice not in self.voices:
@@ -78,7 +78,9 @@ class KPipeline:
             )
         return self.voices[voice]
 
-    # -------- Inference core --------
+    # -------------------------------------------------
+    # Inference core
+    # -------------------------------------------------
     @staticmethod
     def _infer(
         model: KModel,
@@ -87,17 +89,26 @@ class KPipeline:
         speed: float,
     ) -> torch.FloatTensor:
         """
-        Run model inference and return waveform tensor.
+        Run Kokoro inference and return waveform.
         """
+        tokens = phonemes.split()
+        if not tokens:
+            raise ValueError("Empty phoneme sequence")
+
+        # Style index MUST be based on token count, not characters
+        style_index = min(len(tokens) - 1, pack.shape[0] - 1)
+
         out = model(
             phonemes,
-            pack[len(phonemes) - 1],
+            pack[style_index],
             speed,
             return_output=True,
         )
         return out.audio  # torch.FloatTensor
 
-    # -------- Public API --------
+    # -------------------------------------------------
+    # Public API
+    # -------------------------------------------------
     def synthesize(
         self,
         phonemes: Union[str, List[str]],
@@ -108,12 +119,12 @@ class KPipeline:
         Synthesize audio from phoneme strings.
 
         Args:
-            phonemes: str or list[str] (PHONEMES ONLY)
-            voice: registered voice name or voice tensor
+            phonemes: str or list[str] (PHONEMES ONLY, space-separated)
+            voice: registered voice name or tensor
             speed: speech speed multiplier
 
         Returns:
-            List of audio tensors (one per phoneme string)
+            List of audio tensors
         """
         if self.model is None:
             raise RuntimeError("Model not loaded in pipeline")
@@ -134,11 +145,13 @@ class KPipeline:
                 if not ps:
                     continue
 
-                # HARD limit — no silent truncation
-                if len(ps) > 510:
+                tokens = ps.split()
+
+                # HARD safety limit (Kokoro context)
+                if len(tokens) > 510:
                     raise ValueError(
-                        f"Phoneme sequence too long ({len(ps)} > 510). "
-                        f"Chunk phonemes upstream."
+                        f"Phoneme token length too long ({len(tokens)} > 510). "
+                        "Chunk phonemes upstream."
                     )
 
                 audio = self._infer(self.model, ps, pack, speed)
@@ -147,15 +160,15 @@ class KPipeline:
         return audios
 
 
-# -----------------------------
-# Modal-friendly singleton
-# -----------------------------
+# =====================================================
+# Modal-friendly global model cache
+# =====================================================
 _MODEL: Optional[KModel] = None
 
 
 def get_model(device: Optional[str] = None) -> KModel:
     """
-    Global cached model (load once per container).
+    Load Kokoro model once per container.
     """
     global _MODEL
     if _MODEL is None:
